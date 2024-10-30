@@ -1,0 +1,12 @@
+.conda/
+.ipynb_checkpoints/
+data/
+imgs/
+__pycache__/
+*.jpg
+*.png
+*.drawio
+.DS_Store
+qdrant_img_db/
+pretrained/
+*.ipynb
