@@ -8,14 +8,12 @@ from PIL import Image
 from pdf2image import pdf2image
 from typing import List, Union
 from tqdm.auto import tqdm
-import asyncio
 
 from utils import *
 from models import ColPali, ColPaliProcessor, get_lora_model, enable_lora
 
 import qdrant_client
 from qdrant_client.http import models as rest
-from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llamaindex_utils import ColPaliGemmaEmbedding, ColPaliRetriever, CustomFusionRetriever, CustomQueryEngine
 from llama_index.llms.gemini import Gemini
 from llama_index.core.tools import RetrieverTool
@@ -26,6 +24,17 @@ def embed_imgs(model: ColPali,
                processor: ColPaliProcessor,
                input_imgs: List[Image.Image],
                device: str = 'cpu') -> List[torch.Tensor]:
+    """Generates embeddings given images.
+
+    Args:
+        model (ColPali): Main model
+        processor (ColPaliProcessor): Data Processor
+        input_imgs (List[Image.Image]): List of input images
+        device (str, optional): device to run model. Defaults to 'cpu'.
+
+    Returns:
+        List[torch.Tensor]: List of output embedings.
+    """
     
     colpali_model = model.to(device=device).eval()
 
@@ -48,6 +57,17 @@ def embed_queries(model: ColPali,
                   processor: ColPaliProcessor,
                   queries: List[str],
                   device: str = 'cpu') -> List[torch.Tensor]:
+    """Generate embeddings given queries.
+
+    Args:
+        model (ColPali): Embedding model
+        processor (ColPaliProcessor): Data Processor
+        queries (List[str]): List of query strings
+        device (str, optional): Device to run model. Defaults to 'cpu'.
+
+    Returns:
+        List[torch.Tensor]: List of embeddings
+    """
     colpali_model = model.to(device=device).eval()
     
     dataloader = DataLoader(queries,
@@ -68,7 +88,16 @@ def embed_queries(model: ColPali,
 
 
 def score_single_vectors(qs: List[torch.Tensor], 
-                        ps: List[torch.Tensor]):
+                        ps: List[torch.Tensor]) -> torch.FloatTensor:
+    """Calculate similarity between 2 single vectors
+
+    Args:
+        qs (List[torch.Tensor]): First Embeddings
+        ps (List[torch.Tensor]): Second Embeddings
+
+    Returns:
+        torch.FloatTensor: Score Tensor
+    """
     assert len(qs) != 0 and len(ps) != 0
     
     qs_stacked = torch.stack(qs)
@@ -82,7 +111,18 @@ def score_single_vectors(qs: List[torch.Tensor],
 def score_multi_vectors(qs: List[torch.Tensor],
                         ps: List[torch.Tensor],
                         batch_size: int = 8,
-                        device: Union[torch.device|str] = "cpu"):
+                        device: Union[torch.device|str] = "cpu") -> torch.FloatTensor:
+    """Calculate MaxSim between 2 list of vectors.
+
+    Args:
+        qs (List[torch.Tensor]): List of query embeddings
+        ps (List[torch.Tensor]): List of document embeddings
+        batch_size (int, optional): Batch Size. Defaults to 8.
+        device (Union[torch.device | str], optional): Device to cast tensor to. Defaults to "cpu".
+
+    Returns:
+        torch.FloatTensor: Score tensors.
+    """
 
     assert len(qs) != 0 and len(ps) != 0
     scores_list = []
@@ -105,14 +145,26 @@ def indexDocument(file_path: str,
                   target_collection: str,
                   model: nn.Module,
                   processor: ColPaliProcessor,
-                  device: Union[str|torch.device]):
+                  device: Union[str|torch.device]) -> None:
+    """Index document given file_path.
+    Each page in document is embedded by ColPaliGemma Model, then insert into Qdrant vector store given target collection.
+    Creates taret collection if it is not created in the vector store yet.
+
+    Args:
+        file_path (str): _description_
+        vector_store_client (_type_): _description_
+        target_collection (str): _description_
+        model (nn.Module): _description_
+        processor (ColPaliProcessor): _description_
+        device (Union[str | torch.device]): _description_
+    """
     document_images = []
     document_embeddings = []
     document_images.extend(pdf2image.convert_from_path(file_path))
             
     document_embeddings = embed_imgs(model=model,
                                      processor=processor,
-                                     input_imgs=document_images[:10],
+                                     input_imgs=document_images,
                                      device=device)
     
     # Create Qdrant Collectioon
@@ -175,31 +227,33 @@ def indexDocument(file_path: str,
     vector_store_client.upsert(collection_name=target_collection,
                 points=points,
                 wait=False)
-    
-    # RAG using LLamaIndex 
-    qdrant_vector_store = QdrantVectorStore(client=vector_store_client, collection_name=target_collection)
 
-    embed_model = ColPaliGemmaEmbedding(model=model, processor=processor, device=device)
-    retriever = ColPaliRetriever(vector_store=qdrant_vector_store,
-                                 embed_model=embed_model,
-                                 query_mode='default',
-                                 similarity_top_k=5)
-    
-    return retriever
 
 async def async_indexDocument(file_path: str,
                   vector_store_client,
                   target_collection: str,
                   model: nn.Module,
                   processor: ColPaliProcessor,
-                  device: Union[str|torch.device]):
+                  device: Union[str|torch.device]) -> None:
+    """Asynchrously index document given file_path.
+    Each page in document is embedded by ColPaliGemma Model, then insert into Qdrant vector store given target collection.
+    Creates taret collection if it is not created in the vector store yet.
+
+    Args:
+        file_path (str): _description_
+        vector_store_client (_type_): _description_
+        target_collection (str): _description_
+        model (nn.Module): _description_
+        processor (ColPaliProcessor): _description_
+        device (Union[str | torch.device]): _description_
+    """
     document_images = []
     document_embeddings = []
     document_images.extend(pdf2image.convert_from_path(file_path))
             
     document_embeddings = embed_imgs(model=model,
                                      processor=processor,
-                                     input_imgs=document_images[:10],
+                                     input_imgs=document_images,
                                      device=device)
     
     # Create Qdrant Collectioon
@@ -263,18 +317,8 @@ async def async_indexDocument(file_path: str,
     await vector_store_client.upsert(collection_name=target_collection,
                 points=points,
                 wait=False)
-    
-    # RAG using LLamaIndex 
-    qdrant_vector_store = QdrantVectorStore(aclient=vector_store_client, collection_name=target_collection)
-
-    embed_model = ColPaliGemmaEmbedding(model=model, processor=processor, device=device)
-    retriever = ColPaliRetriever(vector_store=qdrant_vector_store,
-                                 embed_model=embed_model,
-                                 query_mode='default',
-                                 similarity_top_k=3)
-    
-    return retriever
   
+
 GEMINI_API_KEY = os.getenv(key="GEMINI_API_KEY")
 
 def main():
@@ -317,20 +361,35 @@ def main():
     # Creating Qdrant Client
     vector_store_client = qdrant_client.QdrantClient(location=":memory:")
     
-    alphabet_retriever = indexDocument('./data/pdfs-financial/Alphabet_Inc_goog-10-q-q1-2024.pdf',
+    indexDocument('./data/pdfs-financial/Alphabet_Inc_goog-10-q-q1-2024.pdf',
                   vector_store_client=vector_store_client,
                   target_collection="Alphabet",
                   model=model, 
                   processor=processor, 
                   device='mps')
     
-    nvidia_retriever = indexDocument('./data/pdfs-financial/Nvidia_ecefb2b2-efcb-45f3-b72b-212d90fcd873.pdf',
-                                     vector_store_client=vector_store_client,
-                                     target_collection="Nvidia",
-                                     model=model, 
-                                     processor=processor, 
-                                     device='mps')
+    indexDocument('./data/pdfs-financial/Nvidia_ecefb2b2-efcb-45f3-b72b-212d90fcd873.pdf',
+                  vector_store_client=vector_store_client,
+                  target_collection="Nvidia",
+                    model=model, 
+                    processor=processor, 
+                    device='mps')
     
+    # RAG using LLamaIndex 
+    
+    embed_model = ColPaliGemmaEmbedding(model=model, processor=processor, device="mps")
+    
+    alphabet_retriever = ColPaliRetriever(vector_store_client=vector_store_client,
+                                          target_collection="Alphabet",
+                                          embed_model=embed_model,
+                                          query_mode='default',
+                                          similarity_top_k=3)
+
+    nvidia_retriever = ColPaliRetriever(vector_store_client=vector_store_client,
+                                          target_collection="Nvidia",
+                                          embed_model=embed_model,
+                                          query_mode='default',
+                                          similarity_top_k=3)
     
     # Query Router Among Multiple Retrievers
     retriever_tools = [
@@ -350,19 +409,17 @@ def main():
     
     fusion_retriever = CustomFusionRetriever(llm=llm,
                                              retriever_mappings=retriever_mappings,
-                                             similarity_top_k=4)
+                                             num_generated_queries=3,
+                                             similarity_top_k=3)
     
     query_engine = CustomQueryEngine(retriever_tools=[retriever_tool.metadata for retriever_tool in retriever_tools],
                                      fusion_retriever=fusion_retriever,
                                      llm=llm,
-                                     num_children=5)
+                                     num_children=3)
     
     query_str = "Compare the net income between Nvidia and Alphabet"
     response = query_engine.query(query_str=query_str)
     print(response.response)
-    # for idx, image in enumerate(response.source_images):
-    #     save_image = Image.open(BytesIO(base64.b64decode(image)))
-    #     save_image.save(f"{idx}.jpg")
 
 async def amain():
     model = ColPali.from_pretrained(model_dir='./pretrained/colpaligemma-3b-mix-448-base', torch_dtype=torch.bfloat16)
@@ -404,19 +461,33 @@ async def amain():
     # Creating Qdrant Client
     vector_store_client = qdrant_client.AsyncQdrantClient(location=":memory:")
     
-    alphabet_retriever = await async_indexDocument('./data/pdfs-financial/Alphabet_Inc_goog-10-q-q1-2024.pdf',
+    await async_indexDocument('./data/pdfs-financial/Alphabet_Inc_goog-10-q-q1-2024.pdf',
                   vector_store_client=vector_store_client,
                   target_collection="Alphabet",
                   model=model, 
                   processor=processor, 
                   device='mps')
     
-    nvidia_retriever = await async_indexDocument('./data/pdfs-financial/Nvidia_ecefb2b2-efcb-45f3-b72b-212d90fcd873.pdf',
-                                     vector_store_client=vector_store_client,
-                                     target_collection="Nvidia",
-                                     model=model, 
-                                     processor=processor, 
-                                     device='mps')
+    await async_indexDocument('./data/pdfs-financial/Nvidia_ecefb2b2-efcb-45f3-b72b-212d90fcd873.pdf',
+                                                    vector_store_client=vector_store_client,
+                                                    target_collection="Nvidia",
+                                                    model=model, 
+                                                    processor=processor, 
+                                                    device='mps')
+    
+    embed_model = ColPaliGemmaEmbedding(model=model, processor=processor, device="mps")
+    
+    alphabet_retriever = ColPaliRetriever(vector_store_client=vector_store_client,
+                                          target_collection="Alphabet",
+                                        embed_model=embed_model,
+                                        query_mode='default',
+                                        similarity_top_k=3)
+    
+    nvidia_retriever = ColPaliRetriever(vector_store_client=vector_store_client,
+                                        target_collection="Nvidia",
+                                        embed_model=embed_model,
+                                        query_mode='default',
+                                        similarity_top_k=3)
     
     
     # Query Router Among Multiple Retrievers
