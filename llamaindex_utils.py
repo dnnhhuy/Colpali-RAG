@@ -166,10 +166,9 @@ class  ColPaliRetriever(BaseRetriever):
         query_embedding = query_embedding.cpu().float().numpy().tolist()
         
         # Get nodes from vector store
-        response = self._vector_store_client.search(collection_name=self._target_collection,
-                                                    query_vector=query_embedding,
-                                                    limit=self._similarity_top_k)
-        
+        response = self._vector_store_client.query_points(collection_name=self._target_collection,
+                                                        query=query_embedding,
+                                                        limit=self._similarity_top_k).points
         # Parse to structured output nodes 
         query_result = parse_to_query_result(response)
         nodes_with_scores = []
@@ -197,9 +196,9 @@ class  ColPaliRetriever(BaseRetriever):
         query_embedding = query_embedding.cpu().float().numpy().tolist()
         
         # Get nodes from vector store
-        response = await self._vector_store_client.search(collection_name=self._target_collection,
+        response = await self._vector_store_client.query_points(collection_name=self._target_collection,
                                                             query_vector=query_embedding,
-                                                            limit=self._similarity_top_k)
+                                                            limit=self._similarity_top_k).points
         
         # Parse to structured output nodes 
         query_result = parse_to_query_result(response)

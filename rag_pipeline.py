@@ -1,4 +1,5 @@
 import torch
+import asyncio
 from torch.utils.data import DataLoader
 import os
 import uuid
@@ -230,7 +231,7 @@ def indexDocument(file_path: str,
 
 
 async def async_indexDocument(file_path: str,
-                  vector_store_client,
+                  vector_store_client: qdrant_client.AsyncQdrantClient,
                   target_collection: str,
                   model: nn.Module,
                   processor: ColPaliProcessor,
@@ -359,7 +360,7 @@ def main():
     
     # Setup Qdrant
     # Creating Qdrant Client
-    vector_store_client = qdrant_client.QdrantClient(location=":memory:")
+    vector_store_client = qdrant_client.QdrantClient(location="http://localhost:6333", timeout=100)
     
     indexDocument('./data/pdfs-financial/Alphabet_Inc_goog-10-q-q1-2024.pdf',
                   vector_store_client=vector_store_client,
@@ -459,7 +460,7 @@ async def amain():
     
     # Setup Qdrant
     # Creating Qdrant Client
-    vector_store_client = qdrant_client.AsyncQdrantClient(location=":memory:")
+    vector_store_client = qdrant_client.AsyncQdrantClient(location="http://localhost:6333", timeout=100)
     
     await async_indexDocument('./data/pdfs-financial/Alphabet_Inc_goog-10-q-q1-2024.pdf',
                   vector_store_client=vector_store_client,
