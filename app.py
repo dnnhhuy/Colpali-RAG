@@ -1,7 +1,6 @@
 import os
 import torch
 import base64
-import asyncio
 from io import BytesIO
 import gradio as gr
 import qdrant_client
@@ -108,10 +107,10 @@ async def index(files: List[str],
                                                                             target_collection=target_collection,
                                                                             embed_model=model_dict["embed_model"],
                                                                             similarity_top_k=3)
-
+    collection_names = await get_collection_names(model_dict["vector_store_client"])
     return (f"Uploaded and index {len(files)} files.",
-            gr.Dropdown(choices=await get_collection_names(model_dict["vector_store_client"])), 
-            get_collection_names(model_dict["vector_store_client"]), 
+            gr.Dropdown(choices=collection_names), 
+            collection_names,
             retrievers)
 
 async def search_with_llm(query: str, 
@@ -220,6 +219,5 @@ with gr.Blocks() as demo:
  
 if __name__ == "__main__":
     model_dict = initialize_model()
-    # model_dict = {}
     demo.queue().launch(debug=True, share=False)
     
