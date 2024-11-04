@@ -1,6 +1,7 @@
 import os
 import torch
 import base64
+import asyncio
 from io import BytesIO
 import gradio as gr
 import qdrant_client
@@ -18,7 +19,9 @@ from llama_index.core.tools import RetrieverTool
 
 GEMINI_API_KEY = os.getenv(key="GEMINI_API_KEY")
 
-def initialize_model() -> Dict:
+device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+
+async def initialize_model() -> Dict:
     """Initialize models
 
     Returns:
@@ -45,6 +48,7 @@ def initialize_model() -> Dict:
                            training=False, 
                            dropout_p=0.1, 
                            torch_dtype=torch.bfloat16)
+    
     model = enable_lora(model, lora_modules=['custom_text_proj'], enabled=True)
     
     model.load_lora('./pretrained/colpaligemma-3b-mix-448-base')
@@ -62,24 +66,34 @@ def initialize_model() -> Dict:
     
     # Setup Qdrant
     # Creating Qdrant Client
-    vector_store_client = qdrant_client.AsyncQdrantClient(location=":memory:")
+    vector_store_client = qdrant_client.AsyncQdrantClient(location="http://localhost:6333", timeout=100)
     
     embed_model = llamaindex_utils.ColPaliGemmaEmbedding(model=model,
                                                          processor=processor,
-                                                         device="mps")
+                                                         device=device)
+    
+    collections = await get_collection_names(vector_store_client)
+    retrievers_dict = {}
+    for name in collections:
+        if name not in retrievers_dict:
+            retrievers_dict[name] = llamaindex_utils.ColPaliRetriever(vector_store_client=vector_store_client,
+                                                                    target_collection=name,
+                                                                    embed_model=embed_model,
+                                                                    similarity_top_k=3)
     return {"llm": llm,
             "vector_store_client": vector_store_client,
             "model": model,
             "processor": processor,
-            "embed_model": embed_model}
+            "embed_model": embed_model,
+            "collections": collections,
+            "retrievers_dict": retrievers_dict}
 
 async def get_collection_names(vector_store_client):
     collections = await vector_store_client.get_collections()
     return [collection.name for collection in collections.collections]
 
 async def index(files: List[str], 
-          target_collection: str, 
-          retrievers: Dict[str, llamaindex_utils.ColPaliRetriever]
+          target_collection: str
           ) -> Tuple[str, gr.Dropdown, List[str], Dict[str, llamaindex_utils.ColPaliRetriever]]:
     """
     Insert all image pages from files to speicified target collection to the vector store
@@ -100,21 +114,20 @@ async def index(files: List[str],
                                 target_collection=target_collection,
                                 model=model_dict["model"],
                                 processor=model_dict["processor"],
-                                device="mps")
-        
+                                device=device)
+    
     if target_collection not in retrievers:
         retrievers[target_collection] = llamaindex_utils.ColPaliRetriever(vector_store_client=model_dict["vector_store_client"],
                                                                             target_collection=target_collection,
                                                                             embed_model=model_dict["embed_model"],
                                                                             similarity_top_k=3)
-    collection_names = await get_collection_names(model_dict["vector_store_client"])
+    collection_names = get_collection_names(model_dict["vector_store_client"])
     return (f"Uploaded and index {len(files)} files.",
             gr.Dropdown(choices=collection_names), 
             collection_names,
             retrievers)
 
-async def search_with_llm(query: str, 
-                    retrievers: Dict[str, llamaindex_utils.ColPaliRetriever],
+async def search_with_llm(query: str,
                     similarity_top_k: int,
                     num_children: int) -> Tuple[str, List[Image.Image]]:
     """Search the result given query and list of retrievers.
@@ -129,7 +142,6 @@ async def search_with_llm(query: str,
     Returns:
         Tuple[str, List[Image.Image]]:  Returns the search's response and list of images support for that response.
     """
-    
     retriever_tools = [RetrieverTool.from_defaults(
                         name=key,
                         retriever=value,
@@ -149,75 +161,85 @@ async def search_with_llm(query: str,
     
     return response.response, [Image.open(BytesIO(base64.b64decode(image))) for image in response.source_images]
 
-with gr.Blocks() as demo:
-    gr.Markdown("# Image Based RAG System using ColPali 📚🔍")
-    with gr.Row(equal_height=True):
-        with gr.Column():
-            gr.Markdown("## 1️. Upload PDFs")
-            files = gr.File(file_types=["pdf"], 
-                            file_count="multiple", 
-                            interactive=True)
-            
-            choices = gr.State(value=[])
-            gr.Markdown("## 2️. Index the PDFs and upload")
-            target_collection = gr.Dropdown(choices=choices.value, 
-                                            allow_custom_value=True,
-                                            label="Collection name", 
-                                            show_label=True,
-                                            interactive=True)
-            
-            message_box = gr.Textbox(value="File not yet uploaded", 
-                                     show_label=False,
-                                     interactive=False)
-            convert_button = gr.Button("🔄 Convert and upload")
-            retrievers = gr.State(value={})
 
-            # Define the actions for conversion
-            convert_button.click(index, inputs=[files, target_collection, retrievers], outputs=[message_box, target_collection, choices, retrievers])
+def build_gui(collections):
+    with gr.Blocks() as demo:
+        gr.Markdown("# Image Based RAG System using ColPali 📚🔍")
+        with gr.Row(equal_height=True):
+            with gr.Column():
+                gr.Markdown("## 1️. Upload PDFs")
+                files = gr.File(file_types=["pdf"], 
+                                file_count="multiple", 
+                                interactive=True)
                 
-        with gr.Column():
-            gr.Markdown("## 3️. Enter your question")
-            query = gr.Textbox(placeholder="Enter your query to match",
-                               lines=15,
-                               max_lines=20,
-                               autoscroll=True)
-            with gr.Accordion(label="Additional Settings", open=False):
-                similarity_top_k = gr.Slider(minimum=1,
+                choices = gr.State(value=collections)
+                gr.Markdown("## 2️. Index the PDFs and upload")
+                target_collection = gr.Dropdown(choices=choices.value, 
+                                                allow_custom_value=True,
+                                                label="Collection name", 
+                                                show_label=True,
+                                                interactive=True)
+                
+                message_box = gr.Textbox(value="File not yet uploaded", 
+                                        show_label=False,
+                                        interactive=False)
+                convert_button = gr.Button("🔄 Convert and upload")
+                
+                # Define the actions for conversion
+                convert_button.click(index, inputs=[files, target_collection], outputs=[message_box, target_collection, choices])
+                    
+            with gr.Column():
+                gr.Markdown("## 3️. Enter your question")
+                query = gr.Textbox(placeholder="Enter your query to match",
+                                lines=15,
+                                max_lines=20,
+                                autoscroll=True)
+                with gr.Accordion(label="Additional Settings", open=False):
+                    similarity_top_k = gr.Slider(minimum=1,
+                                                maximum=10,
+                                                value=3,
+                                                step=1.0,
+                                                label="Top K similarity retrieved from the retriever")
+                    
+                    num_children = gr.Slider(minimum=1, 
                                             maximum=10,
                                             value=3,
                                             step=1.0,
-                                            label="Top K similarity retrieved from the retriever")
+                                            label="Set number of children for Tree Summarization")
+                search_button = gr.Button("🔍 Search")
                 
-                num_children = gr.Slider(minimum=1, 
-                                        maximum=10,
-                                        value=3,
-                                        step=1.0,
-                                        label="Set number of children for Tree Summarization")
-            search_button = gr.Button("🔍 Search")
-            
-    gr.Markdown("## 4️. ColPali Retrieval")
-    with gr.Row(equal_height=True):
-        output_text = gr.Textbox(label="Query result",
-                                 show_label=True,
-                                 placeholder="Response from query",
-                                 lines=8,
-                                 max_lines=20,
-                                 interactive=False)
-        output_imgs = gr.Gallery(label="Most relevant images is...", 
-                                    show_fullscreen_button=True, 
-                                    show_label=True, 
-                                    show_download_button=True,
+        gr.Markdown("## 4️. ColPali Retrieval")
+        with gr.Row(equal_height=True):
+            output_text = gr.Textbox(label="Query result",
+                                    show_label=True,
+                                    placeholder="Response from query",
+                                    lines=8,
+                                    max_lines=20,
                                     interactive=False)
-        
+            output_imgs = gr.Gallery(label="Most relevant images is...", 
+                                        show_fullscreen_button=True, 
+                                        show_label=True, 
+                                        show_download_button=True,
+                                        interactive=False)
             
-    # Action for search button
-    search_button.click(
-                search_with_llm,
-                inputs=[query, retrievers, similarity_top_k, num_children],
-                outputs=[output_text, output_imgs])
-        
- 
-if __name__ == "__main__":
-    model_dict = initialize_model()
+                
+        # Action for search button
+        search_button.click(
+                    search_with_llm,
+                    inputs=[query, similarity_top_k, num_children],
+                    outputs=[output_text, output_imgs])
+    return demo
+
+async def amain():
+    global model_dict, retrievers
+    model_dict = await initialize_model()
+    retrievers = model_dict["retrievers_dict"]
+    
+    demo = build_gui(model_dict["collections"])
     demo.queue().launch(debug=True, share=False)
+    
+    
+if __name__ == "__main__":
+    asyncio.run(amain())
+    
     
