@@ -84,7 +84,7 @@ class ColPaliGemmaEmbedding(BaseEmbedding):
                 **kwargs):
         super().__init__(device=device,
                         **kwargs)
-        self._model = model.to(device)
+        self._model = model.to(device).eval()
         self._processor = processor
     
     @classmethod
@@ -97,10 +97,10 @@ class ColPaliGemmaEmbedding(BaseEmbedding):
         Args:
             query (str): Query String
         """
-        
-        processed_query = self._processor.process_queries([query])
-        processed_query = {k: v.to(self.device) for k, v in processed_query.items()}
-        query_embeddings = self._model(**processed_query)
+        with torch.no_grad():
+            processed_query = self._processor.process_queries([query])
+            processed_query = {k: v.to(self.device) for k, v in processed_query.items()}    
+            query_embeddings = self._model(**processed_query)
         return query_embeddings.to('cpu')[0]
 
     def _get_text_embedding(self, text: str) -> List[float]:
@@ -109,10 +109,10 @@ class ColPaliGemmaEmbedding(BaseEmbedding):
         Args:
             text (str): Text String
         """
-        
-        processed_query = self._processor.process_queries([text])
-        processed_query = {k: v.to(self.device) for k, v in processed_query.items()}
-        query_embeddings = self._model(**processed_query)
+        with torch.no_grad():
+            processed_query = self._processor.process_queries([text])
+            processed_query = {k: v.to(self.device) for k, v in processed_query.items()}
+            query_embeddings = self._model(**processed_query)
         return query_embeddings.to('cpu')[0]
     
     def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -121,10 +121,10 @@ class ColPaliGemmaEmbedding(BaseEmbedding):
         Args:
             texts (List[str]): List of text string
         """
-        
-        processed_queries = self._processor.process_queries(texts)
-        processed_query = {k: v.to(self.device) for k, v in processed_query.items()}
-        query_embeddings = self._model(**processed_queries)
+        with torch.no_grad():
+            processed_queries = self._processor.process_queries(texts)
+            processed_query = {k: v.to(self.device) for k, v in processed_query.items()}
+            query_embeddings = self._model(**processed_queries)
         return query_embeddings.to('cpu')
     
     async def _aget_query_embedding(self, query: str) -> List[float]:
@@ -139,7 +139,7 @@ class  ColPaliRetriever(BaseRetriever):
                 target_collection: str,
                 embed_model: ColPaliGemmaEmbedding,
                 query_mode: str = 'default',
-                similarity_top_k: int = 2,
+                similarity_top_k: int = 3,
                 ) -> None:
         self._vector_store_client = vector_store_client
         self._target_collection = target_collection
@@ -437,7 +437,7 @@ class CustomFusionRetriever(BaseRetriever):
 @dataclass
 class Response:
     response: str
-    source_images: Optional[List] = None
+    source_images: Optional[List] = []
 
     def __str__(self):
         return self.response
@@ -463,84 +463,91 @@ class CustomQueryEngine:
         sub_queries = self._sub_question_generator.generate(tools=self._retriever_tools,
                                                             query=QueryBundle(query_str=query_str))
 
-        # Dictionary to map response -> source_images
-        response2images_mapping = defaultdict(set)
-        
-        # For each sub queries retrieve relevant image nodes
-        # With fusion retriever, each sub query is rewritten to n queries -> retrieve relevant nodes for each generated query 
-        # -> fuse all nodes retrieved from multiple generated queries using reciprocal rank -> get top k results
-        for sub_query in sub_queries:
-            retrieved_nodes = self._fusion_retriever.retrieve(QueryBundle(query_str=sub_query.model_dump_json()))
-            # Using LLM to get the answer for sub query from retrieved nodes
-            for retrieved_node in retrieved_nodes:
-                response2images_mapping[str(self._llm.complete([sub_query.sub_question, Image.open(retrieved_node.node.resolve_image())]))].add(retrieved_node.node.image)
-                
-        # Synthesize results
-        synthesized_text, source_images = synthesize_results(queries=sub_queries,
-                                                             contexts=response2images_mapping,
-                                                             llm=self._llm,
-                                                             num_children=self._num_children)
-        
-        final_answer = self._llm.predict(self._qa_prompt,
-                                         context_str=synthesized_text,
-                                         query_str=query_str)
-        
-        response_template = PromptTemplate("Retrieved Information:\n"
-                                           "------------------------\n"
-                                           "{retrieved_information}\n"
-                                           "-------------------------\n\n"
-                                           "Answer:\n"
-                                           "{final_answer}")
+        if len(sub_queries) == 0:
+            response_template = PromptTemplate("Cannot answer the query: {query_str}")
+            return Response(response=response_template.format(query_str=query_str))
+        else:
+            # Dictionary to map response -> source_images
+            response2images_mapping = defaultdict(set)
+            
+            # For each sub queries retrieve relevant image nodes
+            # With fusion retriever, each sub query is rewritten to n queries -> retrieve relevant nodes for each generated query 
+            # -> fuse all nodes retrieved from multiple generated queries using reciprocal rank -> get top k results
+            for sub_query in sub_queries:
+                retrieved_nodes = self._fusion_retriever.retrieve(QueryBundle(query_str=sub_query.model_dump_json()))
+                # Using LLM to get the answer for sub query from retrieved nodes
+                for retrieved_node in retrieved_nodes:
+                    response2images_mapping[str(self._llm.complete([sub_query.sub_question, Image.open(retrieved_node.node.resolve_image())]))].add(retrieved_node.node.image)
+                    
+            # Synthesize results
+            synthesized_text, source_images = synthesize_results(queries=sub_queries,
+                                                                contexts=response2images_mapping,
+                                                                llm=self._llm,
+                                                                num_children=self._num_children)
+            
+            final_answer = self._llm.predict(self._qa_prompt,
+                                            context_str=synthesized_text,
+                                            query_str=query_str)
+            
+            response_template = PromptTemplate("Retrieved Information:\n"
+                                            "------------------------\n"
+                                            "{retrieved_information}\n"
+                                            "-------------------------\n\n"
+                                            "Answer:\n"
+                                            "{final_answer}")
         
         return Response(response=response_template.format(retrieved_information=synthesized_text, final_answer=final_answer), source_images=source_images)
     
     async def aquery(self, query_str: str):
         sub_queries = await self._sub_question_generator.agenerate(tools=self._retriever_tools,
                                                             query=QueryBundle(query_str=query_str))
-        
-        retrieved_subquestion_nodes = []
-        async with asyncio.TaskGroup() as tg:
-            for sub_query in sub_queries:
-                task = tg.create_task(self._fusion_retriever.aretrieve(QueryBundle(query_str=sub_query.model_dump_json())))
-                retrieved_subquestion_nodes.append([sub_query.sub_question, task])
-        
-        retrieved_subquestion_nodes = [[sub_question, task.result()] for sub_question, task in retrieved_subquestion_nodes]
-        
-        answers = []
-        # For each sub queries retrieve relevant image nodes
-        # With fusion retriever, each sub query is rewritten to n queries -> retrieve relevant nodes for each generated query 
-        # -> fuse all nodes retrieved from multiple generated queries using reciprocal rank -> get top k results
-        async with asyncio.TaskGroup() as tg:
-            for sub_question, retrieved_nodes in retrieved_subquestion_nodes:
-                for retrieved_node in retrieved_nodes:
-                    task = tg.create_task(self._llm.acomplete([sub_question, Image.open(retrieved_node.node.resolve_image())]))
-                    answers.append([task, retrieved_node.node.image])
-        
-        # Dictionary to map response -> source_images
-        response2images_mapping = defaultdict(set)
-        
-        for task, image in answers:
-            response2images_mapping[str(task.result())].add(image)
-        
-        # Synthesize results
-        synthesized_text, source_images = await asynthesize_results(queries=sub_queries,
-                                                       contexts=response2images_mapping,
-                                                       llm=self._llm,
-                                                       num_children=self._num_children)
-        
-        
-        final_answer = await self._llm.apredict(self._qa_prompt,
-                                         context_str=synthesized_text,
-                                         query_str=query_str)
-        
-        response_template = PromptTemplate("Retrieved Information:\n"
-                                           "------------------------\n"
-                                           "{retrieved_information}\n"
-                                           "-------------------------\n\n"
-                                           "Answer:\n"
-                                           "{final_answer}")
-        
-        return Response(response=response_template.format(retrieved_information=synthesized_text, final_answer=final_answer), source_images=source_images)
+        if len(sub_queries) == 0:
+            response_template = PromptTemplate("Cannot answer the query: {query_str}")
+            return Response(response=response_template.format(query_str=query_str))
+        else:
+            retrieved_subquestion_nodes = []
+            async with asyncio.TaskGroup() as tg:
+                for sub_query in sub_queries:
+                    task = tg.create_task(self._fusion_retriever.aretrieve(QueryBundle(query_str=sub_query.model_dump_json())))
+                    retrieved_subquestion_nodes.append([sub_query.sub_question, task])
+            
+            retrieved_subquestion_nodes = [[sub_question, task.result()] for sub_question, task in retrieved_subquestion_nodes]
+            
+            answers = []
+            # For each sub queries retrieve relevant image nodes
+            # With fusion retriever, each sub query is rewritten to n queries -> retrieve relevant nodes for each generated query 
+            # -> fuse all nodes retrieved from multiple generated queries using reciprocal rank -> get top k results
+            async with asyncio.TaskGroup() as tg:
+                for sub_question, retrieved_nodes in retrieved_subquestion_nodes:
+                    for retrieved_node in retrieved_nodes:
+                        task = tg.create_task(self._llm.acomplete([sub_question, Image.open(retrieved_node.node.resolve_image())]))
+                        answers.append([task, retrieved_node.node.image])
+            
+            # Dictionary to map response -> source_images
+            response2images_mapping = defaultdict(set)
+            
+            for task, image in answers:
+                response2images_mapping[str(task.result())].add(image)
+            
+            # Synthesize results
+            synthesized_text, source_images = await asynthesize_results(queries=sub_queries,
+                                                        contexts=response2images_mapping,
+                                                        llm=self._llm,
+                                                        num_children=self._num_children)
+            
+            
+            final_answer = await self._llm.apredict(self._qa_prompt,
+                                            context_str=synthesized_text,
+                                            query_str=query_str)
+            
+            response_template = PromptTemplate("Retrieved Information:\n"
+                                            "------------------------\n"
+                                            "{retrieved_information}\n"
+                                            "-------------------------\n\n"
+                                            "Answer:\n"
+                                            "{final_answer}")
+            
+            return Response(response=response_template.format(retrieved_information=synthesized_text, final_answer=final_answer), source_images=source_images)
             
 
         

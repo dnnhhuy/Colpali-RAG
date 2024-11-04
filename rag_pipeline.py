@@ -225,9 +225,13 @@ def indexDocument(file_path: str,
             vector=multivector,
             payload=payload,
         ))
-    vector_store_client.upsert(collection_name=target_collection,
-                points=points,
-                wait=False)
+        
+    step = 8
+    for i in range(0, len(points), step):
+        points_batch = points[i: i + step]
+        vector_store_client.upsert(collection_name=target_collection,
+                                points=points_batch,
+                                wait=False)
 
 
 async def async_indexDocument(file_path: str,
@@ -314,10 +318,13 @@ async def async_indexDocument(file_path: str,
             vector=multivector,
             payload=payload,
         ))
-        
-    await vector_store_client.upsert(collection_name=target_collection,
-                points=points,
-                wait=False)
+    
+    step = 8
+    for i in range(0, len(points), step):
+        points_batch = points[i: i + step]
+        await vector_store_client.upsert(collection_name=target_collection,
+                    points=points_batch,
+                    wait=False)
   
 
 GEMINI_API_KEY = os.getenv(key="GEMINI_API_KEY")

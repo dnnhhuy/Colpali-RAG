@@ -222,7 +222,6 @@ def build_gui(collections):
                                         show_download_button=True,
                                         interactive=False)
             
-                
         # Action for search button
         search_button.click(
                     search_with_llm,
