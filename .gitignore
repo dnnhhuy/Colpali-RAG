@@ -2,8 +2,6 @@
 .ipynb_checkpoints/
 data/
 __pycache__/
-*.jpg
-*.png
 *.drawio
 .env/
 env/
