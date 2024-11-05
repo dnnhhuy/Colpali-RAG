@@ -15,10 +15,11 @@ from utils import load_tokenizer
 
 from llama_index.llms.gemini import Gemini
 from llama_index.core.tools import RetrieverTool
-
+from huggingface_hub import hf_hub_download
 
 GEMINI_API_KEY = os.getenv(key="GEMINI_API_KEY")
-
+QDRANT_API_KEY = os.getenv(key="QDRANT_API_KEY")
+HF_TOKEN_KEY = os.getenv(key="HF_TOKEN_KEY")
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
 async def initialize_model() -> Dict:
@@ -27,7 +28,22 @@ async def initialize_model() -> Dict:
     Returns:
         model_dict: Dict: Dictionary stores neccessary models
     """
-    
+    if not os.path.exists("./pretrained/colpaligemma-3b-mix-448-base"):
+        os.makedirs("./pretrained/colpaligemma-3b-mix-448-base", exist_ok=True)
+        files_to_download = ["adapter_model.safetensors",
+                            "config.json",
+                            "model-00001-of-00002.safetensors",
+                            "model-00002-of-00002.safetensors",
+                            "preprocessor_config.json",
+                            "tokenizer.json",
+                            "tokenizer.model",
+                            "tokenizer_config.json"]
+        for file in files_to_download:
+            hf_hub_download(repo_id="dnnhhuy/colpaligemma-3b-mix-448-base",
+                            filename=file,
+                            token=HF_TOKEN_KEY,
+                            local_dir="./pretrained/colpaligemma-3b-mix-448-base")
+        
     model = ColPali.from_pretrained(model_dir='./pretrained/colpaligemma-3b-mix-448-base', torch_dtype=torch.bfloat16)
     tokenizer = load_tokenizer(tokenizer_dir='./pretrained/colpaligemma-3b-mix-448-base')
     processor = ColPaliProcessor(tokenizer=tokenizer).from_pretrained(pretrained_dir='./pretrained/colpaligemma-3b-mix-448-base')
@@ -102,8 +118,7 @@ async def index(files: List[str],
     Args:
         files (List[str]): List of file path
         target_collection (str): Target collection to insert into the vector store
-        retrievers (Dict[str, llamaindex_utils.ColPaliRetriever]): Dictionry mapping between retriever's name and and its object instance.
-
+        
     Returns:
         Tuple[str, gr.Dropdown, List[str], Dict[str, llamaindex_utils.ColPaliRetriever]]: Return message, dropdown component, collections' names, dictionary mapping retriever to its object instance
     """
@@ -121,11 +136,10 @@ async def index(files: List[str],
                                                                             target_collection=target_collection,
                                                                             embed_model=model_dict["embed_model"],
                                                                             similarity_top_k=3)
-    collection_names = get_collection_names(model_dict["vector_store_client"])
+    collection_names = await get_collection_names(model_dict["vector_store_client"])
     return (f"Uploaded and index {len(files)} files.",
             gr.Dropdown(choices=collection_names), 
-            collection_names,
-            retrievers)
+            collection_names)
 
 async def search_with_llm(query: str,
                     similarity_top_k: int,
@@ -137,7 +151,7 @@ async def search_with_llm(query: str,
         query (str): Query question
         retrievers (Dict[str, llamaindex_utils.ColPaliRetriever]): Dictionary mapping between retrievers' names and their object instances
         similarity_top_k (int): top K similarity results retrieved from the retriever
-        num_children (int): number of children for tree summarizaiton
+        num_children (int): number of children for tree summarization
 
     Returns:
         Tuple[str, List[Image.Image]]:  Returns the search's response and list of images support for that response.
@@ -161,8 +175,18 @@ async def search_with_llm(query: str,
     
     return response.response, [Image.open(BytesIO(base64.b64decode(image))) for image in response.source_images]
 
+async def delete_collection(target_collection):
+    if await model_dict["vector_store_client"].collection_exists(collection_name=target_collection):
+        await model_dict["vector_store_client"].delete_collection(collection_name=target_collection, timeout=100)
+        choices = await get_collection_names(model_dict["vector_store_client"])
+        return (f"Deleted collection {target_collection}", gr.Dropdown(choices=choices), choices)
+    else:
+        choices = await get_collection_names(model_dict["vector_store_client"])
+        return (f"Collection {target_collection} is not found.", gr.Dropdown(choices=choices), choices)
+        
 
-def build_gui(collections):
+
+def build_gui():
     with gr.Blocks() as demo:
         gr.Markdown("# Image Based RAG System using ColPali 📚🔍")
         with gr.Row(equal_height=True):
@@ -172,7 +196,7 @@ def build_gui(collections):
                                 file_count="multiple", 
                                 interactive=True)
                 
-                choices = gr.State(value=collections)
+                choices = gr.State(value=model_dict["collections"])
                 gr.Markdown("## 2️. Index the PDFs and upload")
                 target_collection = gr.Dropdown(choices=choices.value, 
                                                 allow_custom_value=True,
@@ -183,10 +207,15 @@ def build_gui(collections):
                 message_box = gr.Textbox(value="File not yet uploaded", 
                                         show_label=False,
                                         interactive=False)
-                convert_button = gr.Button("🔄 Convert and upload")
+                with gr.Row(equal_height=True):
+                    delete_button = gr.Button("🗑️ Delete collection")
+                    convert_button = gr.Button("🔄 Convert and upload")
                 
                 # Define the actions for conversion
                 convert_button.click(index, inputs=[files, target_collection], outputs=[message_box, target_collection, choices])
+                
+                # Define the actions for delete collection
+                delete_button.click(delete_collection, inputs=[target_collection], outputs=[message_box, target_collection, choices])
                     
             with gr.Column():
                 gr.Markdown("## 3️. Enter your question")
@@ -222,6 +251,7 @@ def build_gui(collections):
                                         show_download_button=True,
                                         interactive=False)
             
+                
         # Action for search button
         search_button.click(
                     search_with_llm,
@@ -234,7 +264,7 @@ async def amain():
     model_dict = await initialize_model()
     retrievers = model_dict["retrievers_dict"]
     
-    demo = build_gui(model_dict["collections"])
+    demo = build_gui()
     demo.queue().launch(debug=True, share=False)
     
     

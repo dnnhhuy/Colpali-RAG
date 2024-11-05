@@ -199,7 +199,6 @@ class  ColPaliRetriever(BaseRetriever):
         responses = await self._vector_store_client.query_points(collection_name=self._target_collection,
                                                             query=query_embedding,
                                                             limit=self._similarity_top_k)
-        
         responses = responses.points
         # Parse to structured output nodes 
         query_result = parse_to_query_result(responses)
@@ -351,8 +350,7 @@ async def asynthesize_results(queries: List[SubQuestion], contexts: Dict[str, Se
     for idx, response in enumerate(responses):
         # Parse json string to dictionary
         json_dict = parse_json_markdown(response)
-        
-        if len(json_dict["choices"]) > 1:
+        if len(json_dict["choices"]) > 0:
             for choice in json_dict["choices"]:
                 new_contexts[json_dict["summarized_text"]] = new_contexts[json_dict["summarized_text"]].union(contexts[contexts_batches[idx][choice - 1]])
         else:
@@ -437,7 +435,7 @@ class CustomFusionRetriever(BaseRetriever):
 @dataclass
 class Response:
     response: str
-    source_images: Optional[List] = []
+    source_images: Optional[List] = None
 
     def __str__(self):
         return self.response
@@ -465,7 +463,7 @@ class CustomQueryEngine:
 
         if len(sub_queries) == 0:
             response_template = PromptTemplate("Cannot answer the query: {query_str}")
-            return Response(response=response_template.format(query_str=query_str))
+            return Response(response=response_template.format(query_str=query_str), source_images=[])
         else:
             # Dictionary to map response -> source_images
             response2images_mapping = defaultdict(set)
@@ -503,7 +501,7 @@ class CustomQueryEngine:
                                                             query=QueryBundle(query_str=query_str))
         if len(sub_queries) == 0:
             response_template = PromptTemplate("Cannot answer the query: {query_str}")
-            return Response(response=response_template.format(query_str=query_str))
+            return Response(response=response_template.format(query_str=query_str), source_images=[])
         else:
             retrieved_subquestion_nodes = []
             async with asyncio.TaskGroup() as tg:
@@ -528,13 +526,12 @@ class CustomQueryEngine:
             
             for task, image in answers:
                 response2images_mapping[str(task.result())].add(image)
-            
+                
             # Synthesize results
             synthesized_text, source_images = await asynthesize_results(queries=sub_queries,
                                                         contexts=response2images_mapping,
                                                         llm=self._llm,
                                                         num_children=self._num_children)
-            
             
             final_answer = await self._llm.apredict(self._qa_prompt,
                                             context_str=synthesized_text,

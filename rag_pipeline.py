@@ -207,7 +207,8 @@ def indexDocument(file_path: str,
         payload = {}
         node_metadata = {"file_name": file_path,
                         "page_id": i + 1}
-        node_content = {'id_': str(uuid.uuid4()),
+        
+        node_content = {'id_': str(uuid.uuid5(uuid.NAMESPACE_OID, name=(file_path + str(i + 1)))),
                         'image': image_str,
                         "metadata": node_metadata}
         
@@ -221,7 +222,7 @@ def indexDocument(file_path: str,
         payload["ref_doc_id"] = "None"  # for Weaviate
     
         points.append(rest.PointStruct(
-            id=node_content['id_'],
+            id=node_content["id_"],
             vector=multivector,
             payload=payload,
         ))
@@ -300,7 +301,8 @@ async def async_indexDocument(file_path: str,
         payload = {}
         node_metadata = {"file_name": file_path,
                         "page_id": i + 1}
-        node_content = {'id_': str(uuid.uuid4()),
+        
+        node_content = {'id_': str(uuid.uuid5(uuid.NAMESPACE_OID, name=(file_path + str(i + 1)))),
                         'image': image_str,
                         "metadata": node_metadata}
         
@@ -314,7 +316,7 @@ async def async_indexDocument(file_path: str,
         payload["ref_doc_id"] = "None"  # for Weaviate
     
         points.append(rest.PointStruct(
-            id=node_content['id_'],
+            id=node_content["id_"],
             vector=multivector,
             payload=payload,
         ))
