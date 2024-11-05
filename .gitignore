@@ -1,7 +1,6 @@
 .conda/
 .ipynb_checkpoints/
 data/
-imgs/
 __pycache__/
 *.jpg
 *.png
