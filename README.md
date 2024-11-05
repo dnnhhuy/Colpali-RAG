@@ -16,7 +16,9 @@ Images will be retrieved using Contextualized Late Interaction technique with Ma
 * Top score nodes (i.e image nodes) are fed into Multimodal LLM with prior rewritten sub questions to get the answers which are then synthesized to get final condensed information.
 * This condensed information is finally used as context information to answer the original query.
 ## Setup & Deployment
+**Mandatory:** Create an account and create GEMINI API TOKEN KEY. Export the key as a variable environment. <br></br>
 **This project can be run locally following these instruction:**
+
 1. Create virtual environment
 ```
 conda env create --prefix ./.env --file env.yaml
