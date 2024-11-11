@@ -9,10 +9,10 @@ Images will be retrieved using Contextualized Late Interaction technique with Ma
 ## Workflow
 ![prompt-flow](imgs/PromptFlow.png)
 
-* Each page in documents is treated as an image, embedded by PaliGemma and store as a multivector in Qdrant Vector store.
-* A query given by the users will be decompose to sub questions that can be retrieved from multiple retrievers relevant to the sub questions. 
+* Each page in documents is treated as an image, embedded by PaliGemma and stored as a multivector in Qdrant Vector store.
+* A query given by the users will be decomposed to sub questions correspond to the created retrievers' descriptions.
 * For each sub question, it will be rewritten into N (set by the user) queries. These N queries are used to retrieve the most relevant nodes from the assigned retriever.
-* Nodes retrieved from the retriever will be fused using reciprocal rank (i.e to handle duplicated nodes, rank nodes follow their original rank and number of apperances)
+* Nodes retrieved from the retriever will be fused using reciprocal rank (i.e to handle duplicated nodes, nodes ranked follow their original rank and number of appearances)
 * Top score nodes (i.e image nodes) are fed into Multimodal LLM with prior rewritten sub questions to get the answers which are then synthesized to get final condensed information.
 * This condensed information is finally used as context information to answer the original query.
 ## Setup & Deployment
