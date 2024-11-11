@@ -406,12 +406,12 @@ def main():
         RetrieverTool.from_defaults(
             name="alphabet",
             retriever=alphabet_retriever,
-            description="Useful for retrieving information about Alphabet Inc financials"
+            description="Useful for retrieving information about Alphabet Inc."
             ),
         RetrieverTool.from_defaults(
             name="nvidia",
             retriever=nvidia_retriever,
-            description="Useful for retrieving information about Nvidia financials"
+            description="Useful for retrieving information about Nvidia."
             )
         ]
     
