@@ -1,10 +1,13 @@
 # Image based RAG System using ColPali model
 ## Overview
-Image based RAG system to index and retrieve information from PDF documents without splitting text in the documents into chunks. 
-Each page in the document is treated as an image.
+Image based RAG system to index and retrieve information from PDF documents without splitting text in the documents into chunks for indexing and querying. The whole image of the documents' pages will be embedded, indexed and queried by using PaliGemma thanks to its ability to extract the correlation between images and texts.
 
-PaliGemma is used as a main embedding model to embed document pages and store them in the Qdrant Vector Store. 
-Images will be retrieved using Contextualized Late Interaction technique with MaxSim Operator.
+## PaliGemma Architecture
+![paligemma-architecture](imgs/paligemma.png)
+
+PaliGemma is used as a main embedding model to embed document pages and store them in the Qdrant Vector Store.
+
+Images will be retrieved using Contextualized Late Interaction technique with MaxSim Operator given the query also embedded by PaliGemma.
 
 ## Workflow
 ![prompt-flow](imgs/PromptFlow.png)

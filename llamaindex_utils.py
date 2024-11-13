@@ -460,7 +460,7 @@ class CustomQueryEngine:
         # Generate sub queries
         sub_queries = self._sub_question_generator.generate(tools=self._retriever_tools,
                                                             query=QueryBundle(query_str=query_str))
-
+        
         if len(sub_queries) == 0:
             response_template = PromptTemplate("Cannot answer the query: {query_str}")
             return Response(response=response_template.format(query_str=query_str), source_images=[])
