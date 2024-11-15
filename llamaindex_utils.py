@@ -31,7 +31,10 @@ from typing import Any, List, Optional, Tuple, cast
 from qdrant_client.http.models import Payload
 
 from collections import defaultdict
+from google.api_core import retry
 
+
+retry_policy = {"retry": retry.Retry(predicate=retry.if_transient_error, initial=2, maximum=10, multiplier=1, timeout=60)}
 def parse_to_query_result(response: List[Any]) -> VectorStoreQueryResult:
     """
     Convert vector store response to VectorStoreQueryResult.
@@ -252,7 +255,8 @@ def generate_queries(llm: LLM, query: str, num_queries: int) -> List[str]:
     query_prompt = PromptTemplate(DEFAULT_GEN_PROMPT_TMPL)
     generate_queries = llm.predict(query_prompt, 
                                     num_queries=num_queries, 
-                                    query=query)
+                                    query=query,
+                                    request_options=retry_policy)
     generate_queries = generate_queries.split('\n')
     return generate_queries
 
@@ -270,7 +274,8 @@ async def agenerate_queries(llm: LLM, query: str, num_queries: int):
     query_prompt = PromptTemplate(DEFAULT_GEN_PROMPT_TMPL)
     generate_queries = await llm.apredict(query_prompt, 
                                     num_queries=num_queries, 
-                                    query=query)
+                                    query=query,
+                                    request_options=retry_policy)
     generate_queries = generate_queries.split('\n')
     return generate_queries
 
@@ -297,7 +302,7 @@ def synthesize_results(queries: List[SubQuestion], contexts: Dict[str, Set[str]]
         context_str = '\n\n'.join([f"{i + 1}. {text}" for i, text in enumerate(contexts_batch)])
         
         fmt_qa_prompt = qa_prompt.format(context_str=context_str, query_str="\n".join([query.sub_question for query in queries]))
-        combined_result = llm.complete(fmt_qa_prompt)
+        combined_result = llm.complete(fmt_qa_prompt, request_options=retry_policy)
         
         # Parse json string to dictionary
         json_dict = parse_json_markdown(str(combined_result))
@@ -342,7 +347,7 @@ async def asynthesize_results(queries: List[SubQuestion], contexts: Dict[str, Se
     tasks = []
     async with asyncio.TaskGroup() as tg:
         for fmt_qa_prompt in fmt_qa_prompts:
-            task = tg.create_task(llm.acomplete(fmt_qa_prompt))
+            task = tg.create_task(llm.acomplete(fmt_qa_prompt, request_options=retry_policy))
             tasks.append(task)
         
     responses = [str(task.result()) for task in tasks]
@@ -475,7 +480,7 @@ class CustomQueryEngine:
                 retrieved_nodes = self._fusion_retriever.retrieve(QueryBundle(query_str=sub_query.model_dump_json()))
                 # Using LLM to get the answer for sub query from retrieved nodes
                 for retrieved_node in retrieved_nodes:
-                    response2images_mapping[str(self._llm.complete([sub_query.sub_question, Image.open(retrieved_node.node.resolve_image())]))].add(retrieved_node.node.image)
+                    response2images_mapping[str(self._llm.complete([sub_query.sub_question, Image.open(retrieved_node.node.resolve_image())], request_options=retry_policy))].add(retrieved_node.node.image)
                     
             # Synthesize results
             synthesized_text, source_images = synthesize_results(queries=sub_queries,
@@ -485,7 +490,8 @@ class CustomQueryEngine:
             
             final_answer = self._llm.predict(self._qa_prompt,
                                             context_str=synthesized_text,
-                                            query_str=query_str)
+                                            query_str=query_str,
+                                            request_options=retry_policy)
             
             response_template = PromptTemplate("Retrieved Information:\n"
                                             "------------------------\n"
@@ -518,7 +524,7 @@ class CustomQueryEngine:
             async with asyncio.TaskGroup() as tg:
                 for sub_question, retrieved_nodes in retrieved_subquestion_nodes:
                     for retrieved_node in retrieved_nodes:
-                        task = tg.create_task(self._llm.acomplete([sub_question, Image.open(retrieved_node.node.resolve_image())]))
+                        task = tg.create_task(self._llm.acomplete([sub_question, Image.open(retrieved_node.node.resolve_image())], request_options=retry_policy))
                         answers.append([task, retrieved_node.node.image])
             
             # Dictionary to map response -> source_images
@@ -535,7 +541,8 @@ class CustomQueryEngine:
             
             final_answer = await self._llm.apredict(self._qa_prompt,
                                             context_str=synthesized_text,
-                                            query_str=query_str)
+                                            query_str=query_str,
+                                            request_options=retry_policy)
             
             response_template = PromptTemplate("Retrieved Information:\n"
                                             "------------------------\n"
